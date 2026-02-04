@@ -8,15 +8,25 @@ from datetime import datetime
 # --- 1. ตั้งค่าหน้าเว็บ ---
 st.set_page_config(page_title="Gold Pro: Team Edition", page_icon="🏆", layout="wide")
 
-# Custom CSS ให้ดูโปร
+# Custom CSS
 st.markdown("""
 <style>
-    .big-font { font-size:24px !important; font-weight: bold; }
+    @import url('https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;600&display=swap');
+    html, body, [class*="css"]  { font-family: 'Kanit', sans-serif; }
+    
     .gold-box { background-color: #fffbeb; padding: 20px; border-radius: 10px; border: 1px solid #fcd34d; text-align: center; }
-    .signal-box { padding: 15px; border-radius: 8px; margin-bottom: 10px; font-weight: bold;}
-    .buy-sig { background-color: #dcfce7; color: #166534; border-left: 5px solid #166534; }
-    .sell-sig { background-color: #fee2e2; color: #991b1b; border-left: 5px solid #991b1b; }
-    .wait-sig { background-color: #f3f4f6; color: #374151; border-left: 5px solid #6b7280; }
+    .buy-sig { background-color: #dcfce7; color: #166534; padding: 10px; border-radius: 5px; border-left: 5px solid #166534; }
+    .sell-sig { background-color: #fee2e2; color: #991b1b; padding: 10px; border-radius: 5px; border-left: 5px solid #991b1b; }
+    .wait-sig { background-color: #f3f4f6; color: #374151; padding: 10px; border-radius: 5px; border-left: 5px solid #6b7280; }
+    
+    .footer {
+        text-align: center;
+        color: #94a3b8;
+        font-size: 0.9rem;
+        margin-top: 50px;
+        padding-top: 20px;
+        border-top: 1px dashed #cbd5e1;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -32,20 +42,19 @@ def calculate_rsi(df, period=14):
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
-@st.cache_data(ttl=60) # อัปเดตทุก 1 นาที
+@st.cache_data(ttl=60)
 def get_market_data():
     try:
         # ดึงค่าเงินบาท และ ราคาทองโลก
         tickers = "THB=X GC=F"
         df = yf.download(tickers, period="6mo", interval="1d", progress=False)
         
-        # จัดการ MultiIndex
         if isinstance(df.columns, pd.MultiIndex):
             df_close = df['Close']
         else:
             df_close = df['Close']
             
-        fx = df_close['THB=X'].iloc[-1]
+        fx = float(df_close['THB=X'].iloc[-1])
         
         # ข้อมูลทองคำทำกราฟ
         gold_df = yf.download("GC=F", period="6mo", interval="1d", progress=False)
@@ -55,8 +64,8 @@ def get_market_data():
         gold_df['EMA50'] = gold_df['Close'].ewm(span=50, adjust=False).mean()
         gold_df['EMA200'] = gold_df['Close'].ewm(span=200, adjust=False).mean()
         
-        return float(fx), gold_df
-    except Exception as e:
+        return fx, gold_df
+    except:
         return 34.50, None
 
 # --- 3. Sidebar ตั้งค่า ---
@@ -68,8 +77,6 @@ premium = st.sidebar.number_input("ส่วนต่างร้านทอง
 
 # คำนวณราคาทองไทย
 current_usd = df_gold['Close'].iloc[-1] if df_gold is not None else 0
-# สูตร: (Spot * FX * 0.965 * 15.244 / 31.1035) + Premium
-# หรือสูตรลัด: (Spot * FX * 0.473) + Premium
 current_thb = round(((current_usd * fx_rate * 0.473) + premium) / 50) * 50
 
 # --- 4. Dashboard หลัก ---
@@ -93,47 +100,42 @@ if df_gold is not None:
     with col_short:
         st.info("⚡ **สายเก็งกำไร (เล่นสั้น/รายวัน)**")
         signal_short = ""
-        style_short = ""
         
         if rsi_val <= 30:
             signal_short = "🔫 **FIRE! (ซื้อสวน)**: ราคาลงลึกมาก (Oversold) ลุ้นเด้งสั้นๆ"
-            style_short = "buy-sig"
+            st.markdown(f'<div class="buy-sig">{signal_short}</div>', unsafe_allow_html=True)
         elif rsi_val <= 45 and last_close > ema200:
             signal_short = "🟢 **BUY DIP (ย่อซื้อ)**: แนวโน้มยังขาขึ้น ราคาย่อตัวน่าสะสม"
-            style_short = "buy-sig"
+            st.markdown(f'<div class="buy-sig">{signal_short}</div>', unsafe_allow_html=True)
         elif rsi_val >= 70:
             signal_short = "🔴 **SELL (ขายทำกำไร)**: ราคาแพงเกินไป ระวังย่อตัว"
-            style_short = "sell-sig"
+            st.markdown(f'<div class="sell-sig">{signal_short}</div>', unsafe_allow_html=True)
         else:
             signal_short = "⏳ **WAIT (รอจังหวะ)**: ราคากลางๆ ไม่มีความได้เปรียบ"
-            style_short = "wait-sig"
+            st.markdown(f'<div class="wait-sig">{signal_short}</div>', unsafe_allow_html=True)
             
-        st.markdown(f'<div class="{style_short}">{signal_short}</div>', unsafe_allow_html=True)
         st.caption("*เป้าหมายกำไร: 200-500 บาท/บาททองคำ*")
 
     # === กลยุทธ์เล่นยาว (Investor) ===
     with col_long:
         st.success("🐢 **สายออมยาว (ถือข้ามปี/เกษียณ)**")
         signal_long = ""
-        style_long = ""
         
         if last_close > ema200:
             signal_long = "🐂 **HOLD / RUN TREND**: ภาพใหญ่เป็นขาขึ้น ถือต่อไป"
-            style_long = "buy-sig"
+            st.markdown(f'<div class="buy-sig">{signal_long}</div>', unsafe_allow_html=True)
             if last_close < ema50:
-                signal_long += "<br>✨ *ราคาลงมาแตะแนวรับกลาง น่าเก็บเพิ่ม*"
+                st.caption("✨ *ราคาลงมาแตะแนวรับกลาง น่าเก็บเพิ่ม*")
         else:
             signal_long = "🐻 **CAUTION**: ราคาหลุดแนวรับสำคัญ ระยะยาวเริ่มเสียทรง"
-            style_long = "sell-sig"
+            st.markdown(f'<div class="sell-sig">{signal_long}</div>', unsafe_allow_html=True)
             
-        st.markdown(f'<div class="{style_long}">{signal_long}</div>', unsafe_allow_html=True)
         st.caption("*เป้าหมาย: สะสมความมั่งคั่ง ชนะเงินเฟ้อ*")
 
-# --- 6. เครื่องคิดเลขทำมาหากิน (Calculator) ---
+# --- 6. เครื่องคิดเลขทำมาหากิน ---
 st.write("---")
 with st.expander("🧮 เครื่องคิดเลขวางแผนเทรด (Profit Calculator)", expanded=True):
     c_cal1, c_cal2, c_cal3 = st.columns(3)
-    
     with c_cal1:
         my_budget = st.number_input("เงินลงทุน (บาท)", value=10000, step=1000)
     with c_cal2:
@@ -141,13 +143,10 @@ with st.expander("🧮 เครื่องคิดเลขวางแผน
     with c_cal3:
         target_profit = st.number_input("อยากได้กำไรกี่บาท?", value=300, step=50)
         
-    # คำนวณ
-    gold_amount = my_budget / buy_price # จำนวนบาททอง
-    spread = 100 # ส่วนต่างร้านทองรับซื้อคืน (โดยประมาณ)
-    
-    # ราคาขายที่ต้องตั้ง = (ทุน + (กำไรที่อยากได้ / จำนวนทอง) + spread)
+    gold_amount = my_budget / buy_price
+    spread = 100
     sell_price_target = buy_price + (target_profit / gold_amount) + spread
-    sell_price_target = round(sell_price_target / 50) * 50 # ปัดเศษ
+    sell_price_target = round(sell_price_target / 50) * 50
     
     st.markdown(f"""
     <div class="gold-box">
@@ -165,8 +164,12 @@ if df_gold is not None:
                     low=df_gold['Low'], close=df_gold['Close'], name='Price'))
     fig.add_trace(go.Scatter(x=df_gold.index, y=df_gold['EMA50'], name='EMA 50 (ส้ม)', line=dict(color='orange', width=1)))
     fig.add_trace(go.Scatter(x=df_gold.index, y=df_gold['EMA200'], name='EMA 200 (ฟ้า)', line=dict(color='blue', width=2)))
-    
     fig.update_layout(height=500, xaxis_rangeslider_visible=False, title="XAU/USD Daily Chart")
     st.plotly_chart(fig, use_container_width=True)
 else:
     st.error("ไม่สามารถโหลดกราฟได้")
+
+# --- Footer (ลายเซ็นวิศวกร) ---
+st.write("")
+st.write("")
+st.markdown("<div class='footer'>🛠️ Engineered by <b>โบ้ 50</b> | Powered by Python & Streamlit</div>", unsafe_allow_html=True)
