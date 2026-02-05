@@ -17,20 +17,41 @@ st.markdown("""
     html, body, [class*="css"]  { font-family: 'Kanit', sans-serif; }
     
     .gold-box { background-color: #fffbeb; padding: 20px; border-radius: 10px; border: 1px solid #fcd34d; text-align: center; }
-    .buy-sig { background-color: #dcfce7; color: #166534; border: 1px solid #166534; padding: 10px; border-radius: 5px; text-align: center; }
-    .sell-sig { background-color: #fee2e2; color: #991b1b; border: 1px solid #991b1b; padding: 10px; border-radius: 5px; text-align: center; }
-    .wait-sig { background-color: #f3f4f6; color: #374151; border: 1px solid #6b7280; padding: 10px; border-radius: 5px; text-align: center; }
-    .hold-sig { background-color: #e0f2fe; color: #1e40af; border: 1px solid #1e40af; padding: 10px; border-radius: 5px; text-align: center; }
+    
+    /* กล่องสัญญาณ */
+    .sig-box { padding: 15px; border-radius: 8px; margin-bottom: 10px; text-align: center; font-weight: bold; font-size: 1.1rem; }
+    
+    .buy-sig { background-color: #dcfce7; color: #166534; border: 1px solid #166534; }
+    .sell-sig { background-color: #fee2e2; color: #991b1b; border: 1px solid #991b1b; }
+    .wait-sig { background-color: #f3f4f6; color: #374151; border: 1px solid #6b7280; }
     
     .footer { text-align: center; color: #94a3b8; font-size: 0.9rem; margin-top: 50px; border-top: 1px dashed #cbd5e1; padding-top: 20px; }
+    
+    /* Animation สำหรับ Fire Alert */
+    @keyframes pulse {
+        0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.7); }
+        70% { transform: scale(1.02); box-shadow: 0 0 0 10px rgba(220, 38, 38, 0); }
+        100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(220, 38, 38, 0); }
+    }
+    .fire-alert {
+        background-color: #fee2e2; 
+        color: #991b1b; 
+        border: 2px solid #b91c1c; 
+        padding: 20px; 
+        border-radius: 10px; 
+        text-align: center;
+        font-weight: bold;
+        font-size: 1.5rem;
+        animation: pulse 2s infinite;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🏆 Gold Pro: Trap Master V2.8 (Fixed)")
-st.markdown("**เครื่องมือวางแผนเทรดทองคำ: Grid Strategy & AI Analysis**")
+st.title("🏆 Gold Pro: Trap Master V2.9 (Auto Alert)")
+st.markdown("**เครื่องมือวางแผนเทรดทองคำ: แจ้งเตือนเมื่อราคาเข้าเกณฑ์**")
 st.write("---")
 
-# --- 2. ระบบจัดการข้อมูล (Database) ---
+# --- 2. ระบบจัดการข้อมูล ---
 DB_FILE = 'gold_team_data.json'
 
 def load_data():
@@ -38,14 +59,12 @@ def load_data():
         try:
             with open(DB_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                # Migration Check
                 if 'accumulated_profit' not in data: data['accumulated_profit'] = 0.0
                 if 'vault' not in data: data['vault'] = []
                 if 'portfolio' not in data: 
                     data['portfolio'] = {str(i): {'status': 'EMPTY', 'entry_price': 0.0, 'grams': 0.0, 'date': None} for i in range(1, 6)}
                 return data
         except: pass
-    
     return {
         'portfolio': {str(i): {'status': 'EMPTY', 'entry_price': 0.0, 'grams': 0.0, 'date': None} for i in range(1, 6)},
         'vault': [],
@@ -58,56 +77,32 @@ def save_data(data):
 if 'gold_team_data' not in st.session_state:
     st.session_state.gold_team_data = load_data()
 
-# --- 3. ฟังก์ชันคำนวณกราฟ (Technical Engine) ---
+# --- 3. ฟังก์ชันคำนวณกราฟ ---
 def calculate_indicators(df):
-    try:
-        delta = df['Close'].diff()
-        gain = (delta.where(delta > 0, 0)).ewm(alpha=1/14, adjust=False).mean()
-        loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False).mean()
-        rs = gain / loss
-        df['RSI'] = 100 - (100 / (1 + rs))
-        df['EMA50'] = df['Close'].ewm(span=50, adjust=False).mean()
-        df['EMA200'] = df['Close'].ewm(span=200, adjust=False).mean()
-        return df
-    except: return df
+    delta = df['Close'].diff()
+    gain = (delta.where(delta > 0, 0)).ewm(alpha=1/14, adjust=False).mean()
+    loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False).mean()
+    rs = gain / loss
+    df['RSI'] = 100 - (100 / (1 + rs))
+    df['EMA50'] = df['Close'].ewm(span=50, adjust=False).mean()
+    df['EMA200'] = df['Close'].ewm(span=200, adjust=False).mean()
+    return df
 
-# ฟังก์ชันดึงข้อมูลแบบแยกส่วน (Robust Fetcher)
 @st.cache_data(ttl=60)
-def get_market_data_robust():
-    # 1. ดึงค่าเงินบาท (FX)
-    fx_rate = 34.50 # ค่า Default
+def get_market_data():
     try:
-        fx_df = yf.download("THB=X", period="1d", progress=False)
-        if not fx_df.empty:
-            # แก้ปัญหา MultiIndex
-            if isinstance(fx_df.columns, pd.MultiIndex): 
-                 fx_rate = float(fx_df['Close'].iloc[-1].item())
-            else:
-                 fx_rate = float(fx_df['Close'].iloc[-1])
-    except: pass
-
-    # 2. ดึงราคาทองคำ (Gold)
-    gold_df = None
-    try:
-        # ดึงรายชั่วโมง
+        fx = yf.Ticker("THB=X").history(period="1d")['Close'].iloc[-1]
         df = yf.download("GC=F", period="5d", interval="1h", progress=False)
-        
-        # แก้ปัญหา MultiIndex และข้อมูลว่าง
-        if not df.empty:
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
-            
-            df = calculate_indicators(df)
-            gold_df = df
-    except: pass
-    
-    return fx_rate, gold_df
+        if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
+        if len(df) > 0: df = calculate_indicators(df)
+        return float(fx), df
+    except: return 34.50, None
 
 # --- 4. Sidebar ตั้งค่า ---
 st.sidebar.header("⚙️ ตั้งค่าราคา")
 price_source = st.sidebar.radio("แหล่งที่มา:", ["🤖 Auto (Spot)", "✍️ Manual (ระบุเอง)"])
 
-auto_fx, df_gold = get_market_data_robust()
+auto_fx, df_gold = get_market_data()
 current_thb_baht = 0.0 
 current_rsi = 0.0
 
@@ -116,24 +111,16 @@ if price_source == "🤖 Auto (Spot)":
     fx_rate = st.sidebar.number_input("USD/THB", value=auto_fx, format="%.2f")
     premium = st.sidebar.number_input("Premium (+)", value=100.0, step=10.0)
     
-    if df_gold is not None and not df_gold.empty:
-        try:
-            current_usd = float(df_gold['Close'].iloc[-1])
-            current_thb_baht = round(((current_usd * fx_rate * 0.473) + premium) / 50) * 50
-            current_rsi = float(df_gold['RSI'].iloc[-1])
-            st.sidebar.success(f"ราคาตลาด: **{current_thb_baht:,.0f}**")
-        except:
-            st.sidebar.error("คำนวณราคาผิดพลาด")
-    else:
-        st.sidebar.warning("ไม่สามารถดึงราคาทองได้ (ใช้ราคาจำลอง)")
-        current_thb_baht = 40500.0 # ราคาสำรอง
+    if df_gold is not None:
+        current_usd = float(df_gold['Close'].iloc[-1])
+        current_thb_baht = round(((current_usd * fx_rate * 0.473) + premium) / 50) * 50
+        current_rsi = df_gold['RSI'].iloc[-1]
+        st.sidebar.success(f"ราคาตลาด: **{current_thb_baht:,.0f}**")
 else:
     st.sidebar.caption("กรอกราคาซื้อขายจริงจากแอป")
     manual_price = st.sidebar.number_input("ราคาทอง (บาทละ)", value=40500, step=50)
     current_thb_baht = manual_price
-    if df_gold is not None and not df_gold.empty:
-         try: current_rsi = float(df_gold['RSI'].iloc[-1])
-         except: pass
+    if df_gold is not None: current_rsi = df_gold['RSI'].iloc[-1]
 
 st.sidebar.markdown("---")
 st.sidebar.header("📏 ตั้งค่าระยะ Grid")
@@ -150,62 +137,67 @@ base_trade_size = st.sidebar.number_input("เงินต้นเริ่ม�
 # --- 5. AI Strategy Advisor (Dual Mode) ---
 st.subheader("🧠 คำแนะนำกลยุทธ์ (AI Strategy)")
 
-if df_gold is not None and not df_gold.empty:
-    try:
-        last_close = df_gold['Close'].iloc[-1]
-        ema200 = df_gold['EMA200'].iloc[-1]
-        
-        col_sniper, col_investor = st.columns(2)
-        
-        # === กลยุทธ์ 1: Sniper ===
-        with col_sniper:
-            st.markdown("#### ⚡ สายเก็งกำไร")
-            if current_rsi <= 30:
-                st.markdown(f'<div class="buy-sig">💎 <b>FIRE!</b>: ของถูกมาก (RSI {current_rsi:.0f})</div>', unsafe_allow_html=True)
-            elif current_rsi <= 45 and last_close > ema200:
-                st.markdown(f'<div class="buy-sig">🛒 <b>BUY DIP</b>: ย่อตัวน่าสะสม (RSI {current_rsi:.0f})</div>', unsafe_allow_html=True)
-            elif current_rsi >= 75:
-                st.markdown(f'<div class="sell-sig">💰 <b>SELL</b>: ราคาแพงไป (RSI {current_rsi:.0f})</div>', unsafe_allow_html=True)
-            else:
-                st.markdown(f'<div class="wait-sig">⏳ <b>WAIT</b>: ราคากลางๆ (RSI {current_rsi:.0f})</div>', unsafe_allow_html=True)
+if df_gold is not None:
+    last_close = df_gold['Close'].iloc[-1]
+    ema200 = df_gold['EMA200'].iloc[-1]
+    
+    col_sniper, col_investor = st.columns(2)
+    
+    # === กลยุทธ์ 1: Sniper ===
+    with col_sniper:
+        st.markdown("#### ⚡ สายเก็งกำไร")
+        if current_rsi <= 30:
+            st.markdown(f'<div class="buy-sig">💎 <b>FIRE!</b>: RSI {current_rsi:.0f} ต่ำมาก ซื้อเลย!</div>', unsafe_allow_html=True)
+        elif current_rsi <= 45 and last_close > ema200:
+            st.markdown(f'<div class="buy-sig">🛒 <b>BUY DIP</b>: RSI {current_rsi:.0f} ย่อตัวสวย</div>', unsafe_allow_html=True)
+        elif current_rsi >= 75:
+            st.markdown(f'<div class="sell-sig">💰 <b>SELL</b>: RSI {current_rsi:.0f} แพงแล้ว</div>', unsafe_allow_html=True)
+        else:
+            st.markdown(f'<div class="wait-sig">⏳ <b>WAIT</b>: RSI {current_rsi:.0f} กลางๆ</div>', unsafe_allow_html=True)
 
-        # === กลยุทธ์ 2: Investor ===
-        with col_investor:
-            st.markdown("#### 🐢 สายออมยาว")
-            if last_close > ema200:
-                st.markdown('<div class="hold-sig">🐂 <b>HOLD</b>: ภาพใหญ่ขาขึ้น (Run Trend)</div>', unsafe_allow_html=True)
-            else:
-                st.markdown('<div class="sell-sig">🐻 <b>CAUTION</b>: หลุดแนวรับสำคัญ</div>', unsafe_allow_html=True)
-    except:
-        st.warning("รอข้อมูลกราฟ...")
-else:
-    st.info("กำลังโหลดข้อมูลตลาด...")
+    # === กลยุทธ์ 2: Investor ===
+    with col_investor:
+        st.markdown("#### 🐢 สายออมยาว")
+        if last_close > ema200:
+            st.markdown('<div class="hold-sig">🐂 <b>HOLD</b>: เทรนด์ขาขึ้น</div>', unsafe_allow_html=True)
+        else:
+            st.markdown('<div class="sell-sig">🐻 <b>CAUTION</b>: หลุดเทรนด์</div>', unsafe_allow_html=True)
 
-# --- 6. Logic คำนวณพอร์ต ---
+# --- 6. Logic คำนวณพอร์ต & แจ้งเตือน ---
 portfolio = st.session_state.gold_team_data['portfolio']
 last_active_wood = 0
+last_entry_price = 0
+
 for i in range(1, 6):
     if portfolio[str(i)]['status'] == 'ACTIVE':
         last_active_wood = i
+        last_entry_price = portfolio[str(i)]['entry_price']
 
 next_wood = last_active_wood + 1
 trap_price = 0
 trap_reason = ""
+alert_trigger = False
 
 # คำนวณราคาดักซื้อ
 if next_wood == 1:
-    trap_price = current_thb_baht - 100
-    trap_reason = "ราคาตลาด (หรือรอแนวรับ)"
+    # ไม้ 1: ถ้า RSI <= 45 ให้ถือว่าเป็นจังหวะเข้า
+    trap_price = current_thb_baht # ราคาปัจจุบัน
+    trap_reason = "RSI เข้าเกณฑ์ / ราคาตลาด"
+    if current_rsi <= 45: alert_trigger = True
 elif next_wood <= 5:
-    last_entry = portfolio[str(last_active_wood)]['entry_price']
     gap = gap_buy_1_2 if next_wood == 2 else (gap_buy_2_3 if next_wood == 3 else (gap_3_4 if next_wood == 4 else gap_4_5))
-    trap_price = last_entry - gap
+    trap_price = last_entry_price - gap
     trap_reason = f"ระยะห่าง Grid {gap} บาท จากไม้ {last_active_wood}"
+    
+    # ถ้าหลุดลงมาถึงราคาเป้าหมาย -> แจ้งเตือน!
+    if current_thb_baht <= trap_price:
+        alert_trigger = True
 
-trap_price = round(trap_price / 50) * 50
+# ปัดเศษราคาเป้าหมาย (ถ้ายังไม่ถึง)
+if not alert_trigger and next_wood > 1:
+    trap_price = round(trap_price / 50) * 50
 
 # --- 7. Display Dashboard ---
-st.write("---")
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("โหมด", "Auto" if "Auto" in price_source else "Manual")
 c2.metric("สถานะพอร์ต", f"{last_active_wood}/5 ไม้")
@@ -213,14 +205,29 @@ c3.metric("ราคาทองไทย", f"{current_thb_baht:,.0f} ฿")
 current_capital = base_trade_size + st.session_state.gold_team_data.get('accumulated_profit', 0.0)
 c4.metric("เงินทุน (ทบต้น)", f"{current_capital:,.0f} ฿")
 
+# กล่องแจ้งเตือน (Highlight)
 if next_wood <= 5:
-    st.info(f"📢 **ไม้ต่อไป ({next_wood}):** ตั้งรับที่ **{trap_price:,.0f}** บาท ({trap_reason})")
+    if alert_trigger:
+        # กรณีถึงเป้าแล้ว: ขึ้นตัวแดงใหญ่ๆ กระพริบๆ
+        st.markdown(f"""
+        <div class="fire-alert">
+            🚨 FIRE WOOD {next_wood} NOW! 🚨<br>
+            ราคา {current_thb_baht:,.0f} ถึงจุดนัดพบแล้ว ({trap_price:,.0f})<br>
+            <small>กดปุ่มยิงด้านล่างเดี๋ยวนี้!</small>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        # กรณียังไม่ถึงเป้า: แจ้งให้ตั้งรอ
+        st.info(f"""
+        📢 **แผนการรบสำหรับไม้ที่ {next_wood}**
+        ให้ไปตั้งซื้อล่วงหน้า (Limit Order) ที่ราคา: **{trap_price:,.0f} บาท**
+        *เงื่อนไข: {trap_reason}*
+        """)
 else:
     st.error("กระสุนหมดครบ 5 ไม้แล้ว! หยุดซื้อและรอขายอย่างเดียว")
 
 st.write("---")
 
-# Tabs
 tab1, tab2, tab3 = st.tabs(["🔫 Sniper Board", "🧊 Vault", "📈 Chart"])
 
 with tab1:
@@ -235,7 +242,10 @@ with tab1:
             with col_info:
                 if wood['status'] == 'EMPTY':
                     st.caption("ว่าง")
-                    if i == next_wood: st.markdown(f"📍 **รอตั้งรับที่:** `{trap_price:,.0f}`")
+                    if i == next_wood and alert_trigger:
+                         st.markdown(f"🔥 **ยิงเลย! ที่:** `{current_thb_baht:,.0f}`")
+                    elif i == next_wood:
+                         st.markdown(f"📍 **รอช้อนที่:** `{trap_price:,.0f}`")
                 else:
                     target_sell = wood['entry_price'] + gap_profit + spread_buffer
                     curr_profit = (current_thb_baht - spread_buffer - wood['entry_price']) * wood['grams']
@@ -283,7 +293,7 @@ with tab2:
     else: st.info("ยังไม่มีประวัติ")
 
 with tab3:
-    if df_gold is not None and not df_gold.empty:
+    if df_gold is not None:
         st.subheader("📈 กราฟทองคำโลก")
         fig = go.Figure()
         fig.add_trace(go.Candlestick(x=df_gold.index, open=df_gold['Open'], high=df_gold['High'],
@@ -292,6 +302,6 @@ with tab3:
         fig.update_layout(height=500, xaxis_rangeslider_visible=False)
         st.plotly_chart(fig, use_container_width=True)
     else:
-        st.warning("⚠️ กราฟกำลังโหลด หรือตลาดปิด")
+        st.error("ไม่สามารถโหลดกราฟได้")
 
 st.markdown("<div class='footer'>🛠️ Engineered by <b>โบ้ 50</b></div>", unsafe_allow_html=True)
