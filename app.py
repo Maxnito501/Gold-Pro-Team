@@ -4,6 +4,8 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from datetime import datetime
+import json
+import os
 
 # --- 1. ตั้งค่าหน้าเว็บ ---
 st.set_page_config(page_title="Gold Pro: Team Edition", page_icon="🏆", layout="wide")
@@ -13,163 +15,184 @@ st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;600&display=swap');
     html, body, [class*="css"]  { font-family: 'Kanit', sans-serif; }
-    
-    .gold-box { background-color: #fffbeb; padding: 20px; border-radius: 10px; border: 1px solid #fcd34d; text-align: center; }
-    .buy-sig { background-color: #dcfce7; color: #166534; padding: 10px; border-radius: 5px; border-left: 5px solid #166534; }
-    .sell-sig { background-color: #fee2e2; color: #991b1b; padding: 10px; border-radius: 5px; border-left: 5px solid #991b1b; }
-    .wait-sig { background-color: #f3f4f6; color: #374151; padding: 10px; border-radius: 5px; border-left: 5px solid #6b7280; }
-    
-    .footer {
-        text-align: center;
-        color: #94a3b8;
-        font-size: 0.9rem;
-        margin-top: 50px;
-        padding-top: 20px;
-        border-top: 1px dashed #cbd5e1;
-    }
+    .footer { text-align: center; color: #94a3b8; font-size: 0.9rem; margin-top: 50px; border-top: 1px dashed #cbd5e1; padding-top: 20px; }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🏆 Gold Pro: ระบบวิเคราะห์ทองคำ (Team Edition)")
-st.markdown("**เครื่องมือช่วยตัดสินใจสำหรับทีมงาน: เก็งกำไรระยะสั้น & ออมระยะยาว**")
+st.title("🏆 Gold Pro: Trap Master V2.0")
+st.markdown("**เครื่องมือวางแผนเทรดทองคำ (Grid Strategy & Limit Order)**")
 st.write("---")
 
-# --- 2. ฟังก์ชันคำนวณ ---
-def calculate_rsi(df, period=14):
-    delta = df['Close'].diff()
-    gain = (delta.where(delta > 0, 0)).ewm(alpha=1/period, adjust=False).mean()
-    loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/period, adjust=False).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
+# --- 2. ระบบจัดการข้อมูล (Local Database) ---
+DB_FILE = 'gold_team_data.json'
 
-@st.cache_data(ttl=60)
-def get_market_data():
-    try:
-        # ดึงค่าเงินบาท และ ราคาทองโลก
-        tickers = "THB=X GC=F"
-        df = yf.download(tickers, period="6mo", interval="1d", progress=False)
-        
-        if isinstance(df.columns, pd.MultiIndex):
-            df_close = df['Close']
-        else:
-            df_close = df['Close']
-            
-        fx = float(df_close['THB=X'].iloc[-1])
-        
-        # ข้อมูลทองคำทำกราฟ
-        gold_df = yf.download("GC=F", period="6mo", interval="1d", progress=False)
-        if isinstance(gold_df.columns, pd.MultiIndex): gold_df.columns = gold_df.columns.get_level_values(0)
-        
-        gold_df['RSI'] = calculate_rsi(gold_df)
-        gold_df['EMA50'] = gold_df['Close'].ewm(span=50, adjust=False).mean()
-        gold_df['EMA200'] = gold_df['Close'].ewm(span=200, adjust=False).mean()
-        
-        return fx, gold_df
-    except:
-        return 34.50, None
+def load_data():
+    if os.path.exists(DB_FILE):
+        try:
+            with open(DB_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                if 'accumulated_profit' not in data: data['accumulated_profit'] = 0.0
+                if 'vault' not in data: data['vault'] = []
+                if 'portfolio' not in data: 
+                    data['portfolio'] = {str(i): {'status': 'EMPTY', 'entry_price': 0.0, 'grams': 0.0, 'date': None} for i in range(1, 6)}
+                return data
+        except: pass
+    
+    return {
+        'portfolio': {str(i): {'status': 'EMPTY', 'entry_price': 0.0, 'grams': 0.0, 'date': None} for i in range(1, 6)},
+        'vault': [],
+        'accumulated_profit': 0.0
+    }
+
+def save_data(data):
+    with open(DB_FILE, 'w', encoding='utf-8') as f: json.dump(data, f, indent=4)
+
+if 'gold_team_data' not in st.session_state:
+    st.session_state.gold_team_data = load_data()
 
 # --- 3. Sidebar ตั้งค่า ---
-st.sidebar.header("⚙️ ตั้งค่าราคา (Calibration)")
-auto_fx, df_gold = get_market_data()
+st.sidebar.header("⚙️ ตั้งค่าราคา (Price Config)")
+price_source = st.sidebar.radio("แหล่งที่มา:", ["🤖 Auto (Spot)", "✍️ Manual (ระบุเอง)"])
 
-fx_rate = st.sidebar.number_input("ค่าเงินบาท (USD/THB)", value=auto_fx, format="%.2f")
-premium = st.sidebar.number_input("ส่วนต่างร้านทอง (Premium)", value=100.0, step=10.0, help="ปรับเพื่อให้ราคาตรงกับแอปเป๋าตัง/ฮั่วเซ่งเฮง")
+current_thb_baht = 0.0 
+df_gold = None
 
-# คำนวณราคาทองไทย
-current_usd = df_gold['Close'].iloc[-1] if df_gold is not None else 0
-current_thb = round(((current_usd * fx_rate * 0.473) + premium) / 50) * 50
+if price_source == "🤖 Auto (Spot)":
+    @st.cache_data(ttl=60) 
+    def get_market_data():
+        try:
+            fx = yf.Ticker("THB=X").history(period="1d")['Close'].iloc[-1]
+            df = yf.download("GC=F", period="5d", interval="1h", progress=False)
+            if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
+            return float(fx), df
+        except: return 34.50, None
 
-# --- 4. Dashboard หลัก ---
-c1, c2, c3 = st.columns(3)
-c1.metric("🌍 Gold Spot (USD)", f"${current_usd:,.2f}")
-c2.metric("🇹🇭 ทองคำแท่ง (บาท)", f"{current_thb:,.0f} ฿", help="ราคาขายออกโดยประมาณ")
-rsi_val = df_gold['RSI'].iloc[-1] if df_gold is not None else 50
-c3.metric("📊 RSI (Momentum)", f"{rsi_val:.1f}")
-
-# --- 5. AI Strategy Advisor ---
-st.subheader("🧠 คำแนะนำกลยุทธ์ (AI Strategy)")
-
-if df_gold is not None:
-    last_close = df_gold['Close'].iloc[-1]
-    ema50 = df_gold['EMA50'].iloc[-1]
-    ema200 = df_gold['EMA200'].iloc[-1]
+    auto_fx, df_gold = get_market_data()
+    st.sidebar.caption("🔧 จูนราคาให้ตรงแอป")
+    fx_rate = st.sidebar.number_input("USD/THB", value=auto_fx, format="%.2f")
+    premium = st.sidebar.number_input("Premium (+)", value=100.0, step=10.0)
     
-    col_short, col_long = st.columns(2)
-    
-    # === กลยุทธ์เล่นสั้น (Sniper) ===
-    with col_short:
-        st.info("⚡ **สายเก็งกำไร (เล่นสั้น/รายวัน)**")
-        signal_short = ""
-        
-        if rsi_val <= 30:
-            signal_short = "🔫 **FIRE! (ซื้อสวน)**: ราคาลงลึกมาก (Oversold) ลุ้นเด้งสั้นๆ"
-            st.markdown(f'<div class="buy-sig">{signal_short}</div>', unsafe_allow_html=True)
-        elif rsi_val <= 45 and last_close > ema200:
-            signal_short = "🟢 **BUY DIP (ย่อซื้อ)**: แนวโน้มยังขาขึ้น ราคาย่อตัวน่าสะสม"
-            st.markdown(f'<div class="buy-sig">{signal_short}</div>', unsafe_allow_html=True)
-        elif rsi_val >= 70:
-            signal_short = "🔴 **SELL (ขายทำกำไร)**: ราคาแพงเกินไป ระวังย่อตัว"
-            st.markdown(f'<div class="sell-sig">{signal_short}</div>', unsafe_allow_html=True)
-        else:
-            signal_short = "⏳ **WAIT (รอจังหวะ)**: ราคากลางๆ ไม่มีความได้เปรียบ"
-            st.markdown(f'<div class="wait-sig">{signal_short}</div>', unsafe_allow_html=True)
-            
-        st.caption("*เป้าหมายกำไร: 200-500 บาท/บาททองคำ*")
-
-    # === กลยุทธ์เล่นยาว (Investor) ===
-    with col_long:
-        st.success("🐢 **สายออมยาว (ถือข้ามปี/เกษียณ)**")
-        signal_long = ""
-        
-        if last_close > ema200:
-            signal_long = "🐂 **HOLD / RUN TREND**: ภาพใหญ่เป็นขาขึ้น ถือต่อไป"
-            st.markdown(f'<div class="buy-sig">{signal_long}</div>', unsafe_allow_html=True)
-            if last_close < ema50:
-                st.caption("✨ *ราคาลงมาแตะแนวรับกลาง น่าเก็บเพิ่ม*")
-        else:
-            signal_long = "🐻 **CAUTION**: ราคาหลุดแนวรับสำคัญ ระยะยาวเริ่มเสียทรง"
-            st.markdown(f'<div class="sell-sig">{signal_long}</div>', unsafe_allow_html=True)
-            
-        st.caption("*เป้าหมาย: สะสมความมั่งคั่ง ชนะเงินเฟ้อ*")
-
-# --- 6. เครื่องคิดเลขทำมาหากิน ---
-st.write("---")
-with st.expander("🧮 เครื่องคิดเลขวางแผนเทรด (Profit Calculator)", expanded=True):
-    c_cal1, c_cal2, c_cal3 = st.columns(3)
-    with c_cal1:
-        my_budget = st.number_input("เงินลงทุน (บาท)", value=10000, step=1000)
-    with c_cal2:
-        buy_price = st.number_input("ราคาซื้อ (ต้นทุน)", value=current_thb, step=50)
-    with c_cal3:
-        target_profit = st.number_input("อยากได้กำไรกี่บาท?", value=300, step=50)
-        
-    gold_amount = my_budget / buy_price
-    spread = 100
-    sell_price_target = buy_price + (target_profit / gold_amount) + spread
-    sell_price_target = round(sell_price_target / 50) * 50
-    
-    st.markdown(f"""
-    <div class="gold-box">
-        <h4>🎯 เป้าหมายราคาขาย: <b>{sell_price_target:,}</b> บาท</h4>
-        <small>คุณจะได้ทอง: {gold_amount:.4f} บาท | หัก Spread {spread} บาทแล้ว</small>
-    </div>
-    """, unsafe_allow_html=True)
-
-# --- 7. กราฟเทคนิค ---
-st.write("---")
-st.subheader("📈 กราฟราคา Spot Gold")
-if df_gold is not None:
-    fig = go.Figure()
-    fig.add_trace(go.Candlestick(x=df_gold.index, open=df_gold['Open'], high=df_gold['High'],
-                    low=df_gold['Low'], close=df_gold['Close'], name='Price'))
-    fig.add_trace(go.Scatter(x=df_gold.index, y=df_gold['EMA50'], name='EMA 50 (ส้ม)', line=dict(color='orange', width=1)))
-    fig.add_trace(go.Scatter(x=df_gold.index, y=df_gold['EMA200'], name='EMA 200 (ฟ้า)', line=dict(color='blue', width=2)))
-    fig.update_layout(height=500, xaxis_rangeslider_visible=False, title="XAU/USD Daily Chart")
-    st.plotly_chart(fig, use_container_width=True)
+    if df_gold is not None:
+        current_usd = float(df_gold['Close'].iloc[-1])
+        current_thb_baht = round(((current_usd * fx_rate * 0.473) + premium) / 50) * 50
+        st.sidebar.success(f"ราคาตลาด: **{current_thb_baht:,.0f}**")
 else:
-    st.error("ไม่สามารถโหลดกราฟได้")
+    st.sidebar.caption("กรอกราคาซื้อขายจริงจากแอป")
+    manual_price = st.sidebar.number_input("ราคาทอง (บาทละ)", value=40500, step=50)
+    current_thb_baht = manual_price
 
-# --- Footer (ลายเซ็นวิศวกร) ---
-st.write("")
-st.write("")
+st.sidebar.markdown("---")
+st.sidebar.header("📏 ตั้งค่าระยะ Grid")
+gap_buy_1_2 = st.sidebar.number_input("ห่างไม้ 1->2 (บาท)", value=500, step=100)
+gap_buy_2_3 = st.sidebar.number_input("ห่างไม้ 2->3 (บาท)", value=1000, step=100)
+gap_profit = st.sidebar.number_input("กำไรขั้นต่ำ/ไม้ (บาท)", value=300, step=50)
+spread_buffer = st.sidebar.number_input("เผื่อ Spread ขายคืน", value=50.0, step=10.0)
+base_trade_size = st.sidebar.number_input("เงินต้นเริ่มแรก", value=10000, step=1000)
+
+# --- 4. Logic คำนวณ (เหมือนตัว Pro) ---
+portfolio = st.session_state.gold_team_data['portfolio']
+last_active_wood = 0
+last_entry_price = 0
+
+for i in range(1, 6):
+    if portfolio[str(i)]['status'] == 'ACTIVE':
+        last_active_wood = i
+        last_entry_price = portfolio[str(i)]['entry_price']
+
+next_wood = last_active_wood + 1
+trap_price = 0
+trap_reason = ""
+
+if next_wood == 1:
+    trap_price = current_thb_baht - 100
+    trap_reason = "ราคาตลาด (หรือรอแนวรับ)"
+elif next_wood <= 5:
+    gap = gap_buy_1_2 if next_wood == 2 else (gap_buy_2_3 if next_wood == 3 else 1500)
+    trap_price = last_entry_price - gap
+    trap_reason = f"ระยะห่าง Grid {gap} บาท จากไม้ {last_active_wood}"
+
+trap_price = round(trap_price / 50) * 50
+
+# --- 5. Display ---
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("โหมด", "Auto" if "Auto" in price_source else "Manual")
+c2.metric("สถานะพอร์ต", f"{last_active_wood}/5 ไม้")
+c3.metric("ราคาทองไทย", f"{current_thb_baht:,.0f} ฿")
+current_capital = base_trade_size + st.session_state.gold_team_data.get('accumulated_profit', 0.0)
+c4.metric("เงินทุน (ทบต้น)", f"{current_capital:,.0f} ฿")
+
+# กล่องแนะนำ
+if next_wood <= 5:
+    st.info(f"""
+    📢 **แผนการรบสำหรับไม้ที่ {next_wood}**
+    ให้ไปตั้งซื้อล่วงหน้า (Limit Order) ที่ราคา: **{trap_price:,.0f} บาท**
+    *เงื่อนไข: {trap_reason}*
+    """)
+else:
+    st.error("กระสุนหมดครบ 5 ไม้แล้ว! หยุดซื้อและรอขายอย่างเดียว")
+
+st.write("---")
+
+tab1, tab2 = st.tabs(["🔫 Sniper Board", "🧊 Vault"])
+
+with tab1:
+    st.subheader(f"🎯 เป้ากำไร: +{gap_profit} บาท/ไม้")
+    for i in range(1, 6):
+        key = str(i)
+        wood = portfolio[key]
+        
+        with st.container(border=True):
+            col_id, col_info, col_btn = st.columns([1, 3, 2])
+            with col_id: st.markdown(f"### 🪵 #{i}")
+            with col_info:
+                if wood['status'] == 'EMPTY':
+                    st.caption("ว่าง")
+                    if i == next_wood:
+                        st.markdown(f"📍 **รอตั้งรับที่:** `{trap_price:,.0f}`")
+                else:
+                    target_sell = wood['entry_price'] + gap_profit + spread_buffer
+                    curr_profit = (current_thb_baht - spread_buffer - wood['entry_price']) * wood['grams']
+                    color_pl = "green" if current_thb_baht >= target_sell else "red"
+                    st.markdown(f"ทุน: **{wood['entry_price']:.0f}** | เป้าขาย: **{target_sell:,.0f}**")
+                    st.markdown(f"สถานะ: :{color_pl}[{curr_profit:+.0f} ฿]")
+
+            with col_btn:
+                if wood['status'] == 'EMPTY':
+                    prev_active = True if i == 1 else portfolio[str(i-1)]['status'] == 'ACTIVE'
+                    if prev_active:
+                        if st.button(f"🔴 ยิงไม้ {i}", key=f"buy_{i}", use_container_width=True):
+                            st.session_state.gold_team_data['portfolio'][key] = {
+                                'status': 'ACTIVE',
+                                'entry_price': current_thb_baht,
+                                'grams': current_capital / current_thb_baht,
+                                'date': datetime.now().strftime("%Y-%m-%d %H:%M")
+                            }
+                            save_data(st.session_state.gold_team_data)
+                            st.rerun()
+                else:
+                    target_sell = wood['entry_price'] + gap_profit + spread_buffer
+                    btn_type = "primary" if current_thb_baht >= target_sell else "secondary"
+                    if st.button(f"💰 ขายทำกำไร", key=f"sell_{i}", type=btn_type, use_container_width=True):
+                        final_profit = (current_thb_baht - spread_buffer - wood['entry_price']) * wood['grams']
+                        st.session_state.gold_team_data['vault'].append({
+                            'wood': i, 'profit': final_profit, 'date': datetime.now().strftime("%Y-%m-%d %H:%M")
+                        })
+                        st.session_state.gold_team_data['accumulated_profit'] += final_profit
+                        st.session_state.gold_team_data['portfolio'][key] = {'status': 'EMPTY', 'entry_price': 0, 'grams': 0, 'date': None}
+                        save_data(st.session_state.gold_team_data)
+                        st.success(f"กำไร {final_profit:+.0f} บาท")
+                        st.rerun()
+
+with tab2:
+    vault_data = st.session_state.gold_team_data.get('vault', [])
+    if vault_data:
+        st.dataframe(pd.DataFrame(vault_data), use_container_width=True)
+        st.metric("กำไรสะสม", f"{sum(d['profit'] for d in vault_data):,.0f} ฿")
+        if st.button("ล้างประวัติ"):
+            st.session_state.gold_team_data['vault'] = []
+            st.session_state.gold_team_data['accumulated_profit'] = 0
+            save_data(st.session_state.gold_team_data)
+            st.rerun()
+    else: st.info("ยังไม่มีประวัติ")
+
 st.markdown("<div class='footer'>🛠️ Engineered by <b>โบ้ 50</b> | Powered by Python & Streamlit</div>", unsafe_allow_html=True)
