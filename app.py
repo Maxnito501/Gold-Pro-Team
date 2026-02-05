@@ -27,7 +27,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🏆 Gold Pro: Strategic Sniper V3.6 (Visual Alert)")
+st.title("🏆 Gold Pro: Strategic Sniper V3.6 (Fixed)")
 st.markdown("**เครื่องมือวางแผนเทรดทองคำ: แจ้งเตือนจังหวะซื้อ/ขายที่ปุ่มกด**")
 st.write("---")
 
@@ -69,6 +69,13 @@ def calculate_indicators(df):
     df['EMA200'] = df['Close'].ewm(span=200, adjust=False).mean() # เพิ่ม EMA ระยะยาว
     return df
 
+# 🛠️ FIX: เพิ่มฟังก์ชันคำนวณแนวรับต้านที่หายไปกลับคืนมา
+def find_support_resistance(df):
+    # หาจุดต่ำสุด/สูงสุด ในรอบ 50 แท่งล่าสุด
+    recent_low = df['Low'].tail(50).min()
+    recent_high = df['High'].tail(50).max()
+    return recent_low, recent_high
+
 @st.cache_data(ttl=60)
 def get_market_data():
     try:
@@ -88,6 +95,8 @@ auto_fx, df_gold = get_market_data()
 current_thb_baht = 0.0 
 current_rsi = 0.0
 trend_status = "N/A"
+support_usd = 0.0    # 🛠️ FIX: ประกาศตัวแปรเริ่มต้น
+resistance_usd = 0.0 # 🛠️ FIX: ประกาศตัวแปรเริ่มต้น
 
 if price_source == "🤖 Auto (Spot)":
     st.sidebar.caption("🔧 จูนราคาให้ตรงแอป")
@@ -98,6 +107,9 @@ if price_source == "🤖 Auto (Spot)":
         current_usd = float(df_gold['Close'].iloc[-1])
         current_thb_baht = round(((current_usd * fx_rate * 0.473) + premium) / 50) * 50
         current_rsi = df_gold['RSI'].iloc[-1]
+        
+        # คำนวณแนวรับต้าน
+        support_usd, resistance_usd = find_support_resistance(df_gold)
         
         # วิเคราะห์เทรนด์
         ema200 = df_gold['EMA200'].iloc[-1]
@@ -111,6 +123,7 @@ else:
     current_thb_baht = manual_price
     if df_gold is not None: 
         current_rsi = df_gold['RSI'].iloc[-1]
+        support_usd, resistance_usd = find_support_resistance(df_gold)
 
 st.sidebar.markdown("---")
 st.sidebar.header("📏 ตั้งค่าระยะ Grid")
