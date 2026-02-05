@@ -189,6 +189,16 @@ c3.metric("ราคาทองไทย", f"{current_thb_baht:,.0f} ฿")
 current_capital = base_trade_size + st.session_state.gold_team_data.get('accumulated_profit', 0.0)
 c4.metric("เงินทุน (ทบต้น)", f"{current_capital:,.0f} ฿")
 
+# กล่องแนะนำ Trap
+if next_wood <= 5:
+    st.info(f"""
+    📢 **แผนการรบสำหรับไม้ที่ {next_wood}**
+    ให้ไปตั้งซื้อล่วงหน้า (Limit Order) ที่ราคา: **{trap_price:,.0f} บาท**
+    *เงื่อนไข: {trap_reason}*
+    """)
+else:
+    st.error("กระสุนหมดครบ 5 ไม้แล้ว! หยุดซื้อและรอขายอย่างเดียว")
+
 st.write("---")
 
 tab1, tab2, tab3 = st.tabs(["🔫 Sniper Board", "🧊 Vault", "📈 Chart"])
@@ -204,7 +214,7 @@ with tab1:
             with col_id: st.markdown(f"### 🪵 #{i}")
             with col_info:
                 if wood['status'] == 'EMPTY':
-                    st.caption("สถานะ: ว่าง")
+                    st.caption("ว่าง")
                     # โชว์เป้ารอซื้อเฉพาะไม้ถัดไป
                     if i == next_wood_idx and i > 1:
                          st.markdown(f"📍 **รอช้อนที่:** `{buy_price_target:,.0f}`")
@@ -212,7 +222,7 @@ with tab1:
                     target_sell = wood['entry_price'] + gap_profit + spread_buffer
                     curr_profit = (current_thb_baht - spread_buffer - wood['entry_price']) * wood['grams']
                     color_pl = "green" if current_thb_baht >= target_sell else "red"
-                    st.markdown(f"ทุน: **{wood['entry_price']:.0f}** | เป้า: **{target_sell:,.0f}**")
+                    st.markdown(f"ทุน: **{wood['entry_price']:.0f}** | เป้าขาย: **{target_sell:,.0f}**")
                     st.markdown(f"สถานะ: :{color_pl}[{curr_profit:+.0f} ฿]")
 
             with col_btn:
@@ -224,7 +234,7 @@ with tab1:
                                 'status': 'ACTIVE',
                                 'entry_price': current_thb_baht,
                                 'grams': current_capital / current_thb_baht,
-                                'date': datetime.now().strftime("%Y-%m-%d")
+                                'date': datetime.now().strftime("%Y-%m-%d %H:%M")
                             }
                             save_data(st.session_state.gold_team_data)
                             st.rerun()
@@ -234,7 +244,7 @@ with tab1:
                     if st.button(f"💰 ขายทำกำไร", key=f"sell_{i}", type=btn_type, use_container_width=True):
                         final_profit = (current_thb_baht - spread_buffer - wood['entry_price']) * wood['grams']
                         st.session_state.gold_team_data['vault'].append({
-                            'wood': i, 'profit': final_profit, 'date': datetime.now().strftime("%Y-%m-%d")
+                            'wood': i, 'profit': final_profit, 'date': datetime.now().strftime("%Y-%m-%d %H:%M")
                         })
                         st.session_state.gold_team_data['accumulated_profit'] += final_profit
                         st.session_state.gold_team_data['portfolio'][key] = {'status': 'EMPTY', 'entry_price': 0, 'grams': 0, 'date': None}
@@ -256,14 +266,15 @@ with tab2:
 
 with tab3:
     if df_gold is not None:
-        st.subheader("📈 กราฟทองคำโลก")
+        st.subheader("📈 กราฟทองคำโลก (Spot USD)")
         fig = go.Figure()
         fig.add_trace(go.Candlestick(x=df_gold.index, open=df_gold['Open'], high=df_gold['High'],
                         low=df_gold['Low'], close=df_gold['Close'], name='Price'))
-        fig.add_trace(go.Scatter(x=df_gold.index, y=df_gold['EMA50'], name='EMA 50', line=dict(color='orange', width=1)))
-        fig.update_layout(height=500, xaxis_rangeslider_visible=False)
+        fig.add_trace(go.Scatter(x=df_gold.index, y=df_gold['EMA50'], name='EMA 50 (ส้ม)', line=dict(color='orange', width=1)))
+        fig.add_trace(go.Scatter(x=df_gold.index, y=df_gold['EMA200'], name='EMA 200 (ฟ้า)', line=dict(color='blue', width=2)))
+        fig.update_layout(height=500, xaxis_rangeslider_visible=False, title="XAU/USD (1H)")
         st.plotly_chart(fig, use_container_width=True)
     else:
-        st.error("ไม่สามารถโหลดกราฟได้")
+        st.error("ไม่สามารถโหลดกราฟได้ (ลองเปลี่ยนเป็นโหมด Auto หรือรอสักครู่)")
 
-st.markdown("<div class='footer'>🛠️ Engineered by <b>โบ้ 50</b></div>", unsafe_allow_html=True)
+st.markdown("<div class='footer'>🛠️ Engineered by <b>โบ้ 50</b> | Powered by Python & Streamlit</div>", unsafe_allow_html=True)
