@@ -92,7 +92,7 @@ def calculate_indicators(df):
 def get_market_data():
     try:
         fx = yf.Ticker("THB=X").history(period="1d")['Close'].iloc[-1]
-        df = yf.download("GC=F", period="5d", interval="1h", progress=False)
+        df = yf.download("GC=F", period="6mo", interval="1h", progress=False)
         if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
         if len(df) > 0: df = calculate_indicators(df)
         return float(fx), df
@@ -305,3 +305,4 @@ with tab3:
         st.error("ไม่สามารถโหลดกราฟได้")
 
 st.markdown("<div class='footer'>🛠️ Engineered by <b>โบ้ 50</b></div>", unsafe_allow_html=True)
+
